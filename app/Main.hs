@@ -12,10 +12,8 @@ import Text.Parsec hiding (parse, runParser)
 
 data Expr = 
     Var Int
-    | ID Char
     | Lam Expr
     | App Expr Expr
-    | Def Char Expr
     deriving (Show)
 
 runParser str = Parsec.runParser (expr <* eof) () "" str
@@ -29,26 +27,36 @@ expr :: (Stream s m Char) => ParsecT s u m Expr
 expr = chainl1 (nonApp <* spaces) (pure App) <?> "expr" where
     num = do
         (many1 digit) <?> "num"
-    sym = do 
-        (alphaNum) <?> "sym"
     var = (Var . read <$> num) <?> "var"
-    name = (ID <$> sym) <?> "id"
     lam = do
         body <- char '\\' >> spaces >> expr
         (return (Lam body)) <?> "lam"
-    def = do
-        char ':' >> spaces
-        name <- sym
-        spaces 
-        body <- brackets expr
-        (return (Def name body)) <?> "def"
-    nonApp = (def <|> name <|> parens expr <|> lam <|> var) <?> "non-app expr"
+    nonApp = (var <|> parens expr <|> lam) <?> "non-app expr"
     parens = between
         (char '(' >> spaces)
         (char ')' >> spaces)
-    brackets = between
-        (char '{' >> spaces)
-        (char '}' >> spaces)
+
+-- `subst i v e` -- replace all occurences of `Var i` with `v` in `e`. recall
+-- how the index of a variable varies with how nested it is, and keep track of
+-- that!
+subst :: Int -> Expr -> Expr -> Expr
+subst i v (App f x) = App (subst i v f) (subst i v x)
+subst i v (Var n)
+  | i == n    = v
+  | otherwise = Var (n+1)
+subst i v (Lam m) = Lam (subst (i+1) v m)
+
+eval :: Expr -> Expr
+-- β-reduction; perform substitution
+eval (App f x) = case eval f of
+    Lam m -> eval $ subst 0 x m
+    App f' x' -> eval (App f' x') 
+    Var n -> Var n
+-- leave everything else alone
+eval e = e
 
 main :: IO ()
-main = putStrLn $ show (parse ": 9 { \\(a 2) }")
+main = putStrLn $ show $ eval $ parse "(\\\\0) 3"
+-- (\\0 0)(\\0 0) -> infinite loop
+-- (\\\\0)(\\0) -> \\1
+-- (\\\\1) 3 -> \\4
